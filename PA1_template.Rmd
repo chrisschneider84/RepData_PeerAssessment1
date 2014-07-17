@@ -3,18 +3,191 @@
 
 ## Loading and preprocessing the data
 
+Include some additional libraries:
+```{r}
+library("ggplot2")  # for using the ggplot system
+library("reshape2", warn.conflicts = FALSE)  # melt() and cast()
+```
 
+It is assumed that the data is downloaded and unzipped in the current working
+directory. The name of the data file is *activity.csv*.
+```{r}
+activity <- read.csv("activity.csv")
+activity$date <- as.Date(activity$date)
+```
 
 ## What is mean total number of steps taken per day?
 
+Calculating the steps per day
+```{r}
+act_m <- melt(activity, id=2:3)
+stepsum <- dcast(act_m, date ~ variable, sum)
+```
+Set ```binwidth``` as global variable for better comparability of histograms.
+```{r}
+binwidth = 2000
+``` 
+Use the plot system ```ggplot()``` 
+```{r fig.width=8, fig.height=5}
+ggplot(stepsum, aes(steps)) + geom_histogram(binwidth = binwidth)
+```  
 
+At first glance this looks not so far from a normal distibution. A very rough 
+estimate from this plot is about 11000 steps for the mean and the median as 
+well. The precise calculation will drop days where the number of steps is not
+available:
+
+```{r}
+mean(stepsum$steps, na.rm=TRUE)
+median(stepsum$steps, na.rm=TRUE)
+```
+So the rough estimate from the plot is not so bad.
 
 ## What is the average daily activity pattern?
 
+Looking at the intervals
+```{r}
+unique(activity$interval[activity$interval > 1140 & activity$interval < 1220])
+```
+reveal gaps, and with the minimum and the maximum
+```{r}
+min(activity$interval); 
+max(activity$interval)
+```
+the data suggests that the intervals are times in the format ```HHMM``` with no 
+leading zeros.
 
+That doesn't matter because in time series analysis it is normally assumed that
+the observations are evenly distanced in time. So, no further measures are taken
+to transform the intervals into R standard date or time formats.
+
+Aggregate steps by interval with basic R function ```aggregate()```:
+```{r}
+stepave <- aggregate(activity$steps, by=list(activity$interval), 
+                     FUN=mean, na.rm=TRUE)
+colnames(stepave) <- c("interval", "steps.mean")
+```
+A bunch of alternatives to do this task can be found at [stackoverflow][1].
+The following is a time series plot of the 5-minute interval (x-axis) and the 
+average number of steps taken, averaged across all days (y-axis).
+```{r fig.width=8, fig.height=5}
+aveplot <- ggplot(stepave, aes(x=interval, y=steps.mean)) + geom_line()
+aveplot + ylab("average number of steps taken")
+```
+
+The maximum of steps taken, averaged across all days, is:
+```{r}
+max(stepave$steps.mean)
+```
+By
+```{r}
+peakint <- which(stepave$steps.mean == max(stepave$steps.mean))
+peakint
+```
+can be found, that the maximum is reached in the 104th interval. Translate this
+by
+```{r}
+stepave$interval[peakint]
+```
+to find the peak interval from 8:35 to 8:40.
 
 ## Imputing missing values
 
+Note that there are a number of days/intervals where there are missing values 
+(coded as NA). The presence of missing days may introduce bias into some 
+calculations or summaries of the data.
+
+Calculate the total number of missing values in the dataset 
+(i.e. the total number of rows with NAs)
+```{r}
+summary(activity)
+```
+This is telling us that there are 2304 NA values in the activity data, all of 
+them in the steps, none in date or interval. Double check this with the 
+```complete.cases()``` function:
+```{r}
+nrow(activity) - sum(complete.cases(activity))
+```
+A valid strategy for filling in all of the missing values in the dataset is
+to use the mean of available values of steps taken in that 5-minute interval, 
+averaged across all days.
+
+Create a new dataset that is equal to the original dataset but with the missing data filled in. First there will be a data dictionary to access means of steps
+```{r}
+mean.dict <- stepave$steps.mean
+names(mean.dict) <- stepave$interval
+stepmeans <- mean.dict[as.character(activity$interval)]
+```
+Copy ```activity``` table to replace cell contents of steps in case values are
+not available and fill in ```steps``` values from dictionary.
+```{r}
+actfill <- activity
+actfill$steps[is.na(actfill$steps)] <- stepmeans[is.na(actfill$steps)]
+```
+Double check the result.
+```{r}
+sum(is.na(activity))
+sum(is.na(actfill))
+summary(actfill$steps - activity$steps)
+```
+So, all ```steps``` data are identical, except where no data were available. No
+significant data were overwritten, all ```NA``` were replaced.
+
+Recalculating the total steps per day
+```{r}
+actfill_m <- melt(actfill, id=2:3)
+fillsum <- dcast(actfill_m, date ~ variable, sum)
+```
+Replot the histogram with the imputed ```steps``` data:
+```{r fig.width=8, fig.height=5}
+ggplot(fillsum, aes(steps)) + geom_histogram(binwidth = binwidth)
+```
+
+That looks very near the same as the first histogram. Checking the mean and the
+median:
+```{r}
+mean(fillsum$steps)
+median(fillsum$steps)
+```
+The mean is the same as in the first part, the median differs by 1. The only
+bin of the histogram changing in height is the one holding the mean (median).
+That holds even when variing the binwidth of both histograms accordingly.
+
+Make a histogram of the total number of steps taken each day and Calculate and report the mean and median total number of steps taken per day. Do these values differ from the estimates from the first part of the assignment? What is the impact of imputing missing data on the estimates of the total daily number of steps?
 
 
 ## Are there differences in activity patterns between weekdays and weekends?
+
+To split the activities in workdays and weekend use another hint from 
+[stackoverflow][2]. This allows an operation on weekday names instead of 
+numbers, and avoids hassles with the localization at the same time. 
+```{r}
+weekend <- weekdays(as.Date(4,"1970-01-01",tz="GMT")+5:6)
+```
+According to this [hint][3] append another column to the activities:
+```{r}
+actfill$daygroup <- ifelse(weekdays(actfill$date) %in% weekend, 
+                            "weekend", "weekday")
+```
+The total number of taken steps in each 5-minute interval will be averaged,
+and grouped by weekday resp. weekend.
+```{r}
+actweekaggr <- aggregate(actfill$steps, by=list(actfill$interval, actfill$daygroup), 
+                     FUN=mean, na.rm=TRUE)
+colnames(actweekaggr) <- c("interval", "daygroup", "steps")
+```
+Eventually the graphs are plotted in a facet grid
+```{r fig.width=8, fig.height=5}
+g <- ggplot(actweekaggr, aes(x=interval, y=steps)) + geom_line()
+g + facet_grid(daygroup ~ .) + ylab("average number of steps taken")
+```  
+
+Comparing weekdays and weekend, there is a much higher rate of activity in the 
+weekday morning between 5:00h and about 9:00h. Through the day the activity 
+level at the weekend is about twice as high as at weekdays. After 17:00h there
+is a nip-and-tuck race until the activity dies off evenly from 21:00h to night 
+in both groups.
+
+[1]: http://stackoverflow.com/questions/9799957/computing-averages-by-groups-with-r "Computing averages by groups with R"  
+[2]: http://stackoverflow.com/questions/16193549/how-can-i-create-a-vector-containing-the-days-of-the-week "How can I create a vector containing the days of the week?"
+[3]: http://stackoverflow.com/questions/21234510/how-to-separate-a-vector-through-ifelse-and-labels "How to separate a vector through ifelse and labels?"
